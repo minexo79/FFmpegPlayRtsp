@@ -5,13 +5,19 @@
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
         xmlns:local="clr-namespace:FFmpegPlayRtspDemo"
         mc:Ignorable="d"
-        Title="FFmpeg播放" Height="880" Width="1000" WindowStartupLocation="CenterScreen" ResizeMode="NoResize">
+        Title="FFmpeg播放" Height="720" Width="1280" WindowStartupLocation="CenterScreen">
     <Grid>
-        <WrapPanel x:Name="wp">
-            <local:FFmpegPlayer x:Name="player1" Width="400" Height="400"/>
-            <local:FFmpegPlayer x:Name="player2" Width="400" Height="400"/>
-            <local:FFmpegPlayer x:Name="player3" Width="400" Height="400"/>
-            <local:FFmpegPlayer x:Name="player4" Width="400" Height="400"/>
-        </WrapPanel>
+        <Grid x:Name="wp">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <local:FFmpegPlayer x:Name="player1" Grid.Column="0" Grid.Row="0" />
+            <local:FFmpegPlayer x:Name="player2" Grid.Column="1" Grid.Row="0" />
+        </Grid>
     </Grid>
 </Window>

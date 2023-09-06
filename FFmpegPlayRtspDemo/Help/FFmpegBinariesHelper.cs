@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using FFmpeg.AutoGen;
 
 namespace FFmpegPlayRtspDemo.Help
 {
@@ -47,7 +48,8 @@ namespace FFmpegPlayRtspDemo.Help
                 case PlatformID.Win32NT:
                 case PlatformID.Win32S:
                 case PlatformID.Win32Windows:
-                    SetDllDirectory(path);
+                    //SetDllDirectory(path);
+                    ffmpeg.RootPath = path; // 5.1.2
                     break;
                 case PlatformID.Unix:
                 case PlatformID.MacOSX:

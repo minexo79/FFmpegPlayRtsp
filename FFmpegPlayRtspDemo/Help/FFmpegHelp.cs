@@ -8,6 +8,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Drawing.Imaging;
 using FFmpegPlayRtspDemo.Help;
+using System.Windows.Controls;
 
 namespace FFmpegPlayRtspDemo
 {
@@ -28,10 +29,8 @@ namespace FFmpegPlayRtspDemo
             ffmpeg.avcodec_register_all();
             ffmpeg.avformat_network_init();
             #endregion
-            AVFormatContext* pFc;
             // 分配音视频格式上下文
             pFc = ffmpeg.avformat_alloc_context();
-            ClassHelp.Instance.FFmpegHelp.pFc = pFc;
         }
         /// <summary>
         /// 显示图片委托
@@ -60,8 +59,8 @@ namespace FFmpegPlayRtspDemo
 
             #region ffmpeg 初始化
             // 初始化注册ffmpeg相关的编码器
-            ffmpeg.av_register_all();
-            ffmpeg.avcodec_register_all();
+            //ffmpeg.av_register_all();         // ffmpeg 4.0 開始被捨棄
+            //ffmpeg.avcodec_register_all();    // ffmpeg 4.0 開始被捨棄
             ffmpeg.avformat_network_init();
 
             Console.WriteLine($"FFmpeg version info: {ffmpeg.av_version_info()}");
@@ -86,15 +85,17 @@ namespace FFmpegPlayRtspDemo
             #endregion
 
             #region ffmpeg 转码
-
-
             // 分配音视频格式上下文
             var pFormatContext = ffmpeg.avformat_alloc_context();
 
             int error;
 
+            AVDictionary* opt = null;
+            ffmpeg.av_dict_set(&opt, "rtsp_transport", "tcp", 0);
+            ffmpeg.av_dict_set(&opt, "stimeout", "10000000", 0);
+
             //打开流
-            error = ffmpeg.avformat_open_input(&pFormatContext, url, null, null);
+            error = ffmpeg.avformat_open_input(&pFormatContext, url, null, &opt);
             if (error != 0) throw new ApplicationException(GetErrorMessage(error));
 
             // 读取媒体流信息
@@ -114,12 +115,12 @@ namespace FFmpegPlayRtspDemo
             AVStream* pStream = null, aStream;
             for (var i = 0; i < pFormatContext->nb_streams; i++)
             {
-                if (pFormatContext->streams[i]->codec->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
+                if (pFormatContext->streams[i]->codecpar->codec_type == AVMediaType.AVMEDIA_TYPE_VIDEO)
                 {
                     pStream = pFormatContext->streams[i];
 
                 }
-                else if (pFormatContext->streams[i]->codec->codec_type == AVMediaType.AVMEDIA_TYPE_AUDIO)
+                else if (pFormatContext->streams[i]->codecpar->codec_type == AVMediaType.AVMEDIA_TYPE_AUDIO)
                 {
                     aStream = pFormatContext->streams[i];
 
@@ -128,30 +129,41 @@ namespace FFmpegPlayRtspDemo
             if (pStream == null) throw new ApplicationException(@"Could not found video stream.");
 
             // 获取流的编码器上下文
-            var codecContext = *pStream->codec;
+            AVCodecContext* codecContext = ffmpeg.avcodec_alloc_context3(ffmpeg.avcodec_find_encoder(pStream->codecpar->codec_id));
+            ffmpeg.avcodec_parameters_to_context(codecContext, pStream->codecpar);
 
-            Console.WriteLine($"codec name: {ffmpeg.avcodec_get_name(codecContext.codec_id)}");
+            error = ffmpeg.av_hwdevice_ctx_create(&codecContext->hw_device_ctx, AVHWDeviceType.AV_HWDEVICE_TYPE_DXVA2, null, null, 0);
+            if (error < 0) throw new ApplicationException(GetErrorMessage(error));
+
+            error = ffmpeg.avcodec_parameters_to_context(codecContext, pStream->codecpar);
+            if (error < 0) throw new ApplicationException(GetErrorMessage(error));
+
+            Console.WriteLine($"codec name: {ffmpeg.avcodec_get_name(codecContext->codec_id)}");
+
             // 获取图像的宽、高及像素格式
-            var width = codecContext.width;
-            var height = codecContext.height;
-            var sourcePixFmt = codecContext.pix_fmt;
-
-            // 得到编码器ID
-            var codecId = codecContext.codec_id;
+            var width = codecContext->width;
+            var height = codecContext->height;
+            var sourcePixFmt = codecContext->pix_fmt;
+                
+            // 得到编码器ID  
+            var codecId = codecContext->codec_id;
             // 目标像素格式
             var destinationPixFmt = AVPixelFormat.AV_PIX_FMT_BGR24;
 
 
             // 某些264格式codecContext.pix_fmt获取到的格式是AV_PIX_FMT_NONE 统一都认为是YUV420P
-            if (sourcePixFmt == AVPixelFormat.AV_PIX_FMT_NONE && codecId == AVCodecID.AV_CODEC_ID_H264)
-            {
-                sourcePixFmt = AVPixelFormat.AV_PIX_FMT_YUV420P;
-            }
+            // 硬體解碼，改成NV12
+            sourcePixFmt = AVPixelFormat.AV_PIX_FMT_NV12;
+            //if (sourcePixFmt == AVPixelFormat.AV_PIX_FMT_NONE && codecId == AVCodecID.AV_CODEC_ID_H264)
+            //{
+            //    sourcePixFmt = AVPixelFormat.AV_PIX_FMT_NV12;
+            //}
 
             // 得到SwsContext对象：用于图像的缩放和转换操作
             var pConvertContext = ffmpeg.sws_getContext(width, height, sourcePixFmt,
                 width, height, destinationPixFmt,
                 ffmpeg.SWS_FAST_BILINEAR, null, null, null);
+
             if (pConvertContext == null) throw new ApplicationException(@"Could not initialize the conversion context.");
 
             //分配一个默认的帧对象:AVFrame
@@ -169,25 +181,31 @@ namespace FFmpegPlayRtspDemo
 
             #region ffmpeg 解码
             // 根据编码器ID获取对应的解码器
-            var pCodec = ffmpeg.avcodec_find_decoder(codecId);
-            if (pCodec == null) throw new ApplicationException(@"Unsupported codec.");
+            AVCodec* pCodec = ffmpeg.avcodec_find_decoder(codecId);
 
+            if (pCodec == null) throw new ApplicationException(@"Unsupported codec.");
             var pCodecContext = &codecContext;
 
             if ((pCodec->capabilities & ffmpeg.AV_CODEC_CAP_TRUNCATED) == ffmpeg.AV_CODEC_CAP_TRUNCATED)
-                pCodecContext->flags |= ffmpeg.AV_CODEC_FLAG_TRUNCATED;
+                pCodecContext.flags |= ffmpeg.AV_CODEC_FLAG_TRUNCATED;
+
 
             // 通过解码器打开解码器上下文:AVCodecContext pCodecContext
             error = ffmpeg.avcodec_open2(pCodecContext, pCodec, null);
             if (error < 0) throw new ApplicationException(GetErrorMessage(error));
 
             // 分配解码帧对象：AVFrame pDecodedFrame
-            var pDecodedFrame = ffmpeg.av_frame_alloc();
+            AVFrame* pDecodedFrame = ffmpeg.av_frame_alloc();
+            // 分配硬體解碼帧对象：AVFrame pHwDecodedFrame
+            AVFrame* pHwDecodedFrame = ffmpeg.av_frame_alloc();
 
             // 初始化媒体数据包
             var packet = new AVPacket();
             var pPacket = &packet;
             ffmpeg.av_init_packet(pPacket);
+
+            ffmpeg.av_frame_unref(pDecodedFrame);   // 释放解码帧对象引用
+            ffmpeg.av_frame_unref(pHwDecodedFrame); // 释放硬體解码帧对象引用
 
             var frameNumber = 0;
             while (CanRun)
@@ -207,9 +225,12 @@ namespace FFmpegPlayRtspDemo
                         // 解码
                         error = ffmpeg.avcodec_send_packet(pCodecContext, pPacket);
                         if (error < 0) throw new ApplicationException(GetErrorMessage(error));
+
                         // 解码输出解码数据
                         error = ffmpeg.avcodec_receive_frame(pCodecContext, pDecodedFrame);
+
                     } while (error == ffmpeg.AVERROR(ffmpeg.EAGAIN) && CanRun);
+
                     if (error == ffmpeg.AVERROR_EOF) break;
                     if (error < 0) throw new ApplicationException(GetErrorMessage(error));
 
@@ -217,12 +238,21 @@ namespace FFmpegPlayRtspDemo
 
                     //Console.WriteLine($@"frame: {frameNumber}");
                     // YUV->RGB
-                    ffmpeg.sws_scale(pConvertContext, pDecodedFrame->data, pDecodedFrame->linesize, 0, height, dstData, dstLinesize);
+                    if (pCodecContext->hw_device_ctx != null && pCodecContext->hwaccel != null)
+                    {
+                        error = ffmpeg.av_hwframe_transfer_data(pHwDecodedFrame, pDecodedFrame, 0);
+                        if (error < 0) throw new ApplicationException(GetErrorMessage(error));
+
+                        ffmpeg.sws_scale(pConvertContext, pHwDecodedFrame->data, pHwDecodedFrame->linesize, 0, height, dstData, dstLinesize);
+                    }
+                    else
+                        ffmpeg.sws_scale(pConvertContext, pDecodedFrame->data, pDecodedFrame->linesize, 0, height, dstData, dstLinesize);
                 }
                 finally
                 {
-                    ffmpeg.av_packet_unref(pPacket);//释放数据包对象引用
-                    ffmpeg.av_frame_unref(pDecodedFrame);//释放解码帧对象引用
+                    ffmpeg.av_packet_unref(pPacket);        // 释放数据包对象引用
+                    ffmpeg.av_frame_unref(pDecodedFrame);   // 释放解码帧对象引用
+                    ffmpeg.av_frame_unref(pHwDecodedFrame); // 释放硬體解码帧对象引用
                 }
 
                 // 封装Bitmap图片
@@ -243,6 +273,7 @@ namespace FFmpegPlayRtspDemo
             ffmpeg.av_free(pConvertedFrame);
             ffmpeg.sws_freeContext(pConvertContext);
 
+            ffmpeg.av_free(pHwDecodedFrame);
             ffmpeg.av_free(pDecodedFrame);
             ffmpeg.avcodec_close(pCodecContext);
             ffmpeg.avformat_close_input(&pFormatContext);
